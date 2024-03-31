@@ -7,4 +7,15 @@ output: html_notebook
 
 2. Allen Tugade(allen.tugade@plu.edu), Camden Hunt(hunt@plu.edu), Cole Stewart(cole.stewart@plu.edu)
 
-2. 
+3. Meeting times?
+
+4. Looking at different factors related to college outcomes(loans, graduation status etc.) such as family status and participation in different school activities.
+
+5. Still waiting to get feedback from Institutional Research but the data set provides a number of different specific outcomes we can look at.
+
+![Dataset Variables](C:\\Users\\coles\\OneDrive\\Documents\\Consultation Project - Data348\\Consultation Dataset Variables.png)
+
+6. This data set has 22 different variables that we can utilize to answer our eventual research question.
+
+7. Currently we are waiting for Craig Chamberlain to reach back out about clearing Camden and I(Cole) to access the data set and provide us with some insight on what we should use for our research question. We will then be able to start working with the data.
+
