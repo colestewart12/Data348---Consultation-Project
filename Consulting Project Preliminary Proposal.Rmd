@@ -1,0 +1,10 @@
+---
+title: "Consulting Project Preliminary Proposal"
+output: html_notebook
+---
+
+1. 3
+
+2. Allen Tugade(allen.tugade@plu.edu), Camden Hunt(hunt@plu.edu), Cole Stewart(cole.stewart@plu.edu)
+
+2. 
