@@ -1,0 +1,23 @@
+---
+title: "STAT 348 Final Project"
+output: html_notebook
+---
+
+```{r}
+library(tidyverse)
+
+SFA <- read.csv("Student Financial Data Project.csv")
+
+
+SFA_working <- SFA %>%
+  mutate(across(1, as.factor))%>%
+  mutate(across(2, as.factor))%>%
+  mutate(across(9:18, as.factor)) 
+
+SFA_working[SFA_working == 'No FAFSA'] <- NA
+
+SFA_working$EFC <- as.numeric(SFA_working$EFC)
+
+
+```
+
