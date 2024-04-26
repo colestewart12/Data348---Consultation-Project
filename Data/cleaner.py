@@ -6,6 +6,8 @@ df = pd.read_csv('Student Financial Data Project.csv')
 
 # drop all rows except first entry for each unique UID
 df.drop_duplicates(subset='UID', keep='first', inplace=True)
+# drop all students who have no fafse
+df = df[df['EFC'] != "No FAFSA"]
 
 variables = ['CURR_GPA', 'FIRST_YEAR_CREDITS', 'DFWIS', 'PRIOR_SEMESTERS_COMPLETED',
              'IN_STATE', 'INTERNATIONAL', 'GENDER', 'ETHNICITY', 'FIRST_YEAR_ON_CAMPUS',
