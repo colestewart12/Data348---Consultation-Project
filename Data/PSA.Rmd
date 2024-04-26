@@ -1,0 +1,831 @@
+---
+title: "PSA"
+output:
+  pdf_document: default
+  html_notebook: default
+  fig_captions: true
+---
+
+```{r libraries and data, warning=FALSE, echo=FALSE, message=FALSE}
+library(tidyverse)
+library(forcats)
+library(car)
+library(rstatix)
+library(infer)
+library(knitr)
+library(readr)
+library(ggpubr)
+
+
+
+SFA <- read.csv("Student Financial Data Project.csv")
+
+```
+
+```{r Wrangling Data, echo = FALSE, message=FALSE}
+
+oStuData <- SFA %>%
+  mutate(across(1, as.factor))%>%
+  mutate(across(2, as.factor))%>%
+  mutate(across(9:18, as.factor)) 
+
+oStuData[oStuData == 'No FAFSA'] <- NA
+
+oStuData$EFC <- as.numeric(oStuData$EFC)
+```
+
+```{r Wangling Data 2, echo = FALSE, message = FALSE}
+joiner <-  read_csv("SFA Data Append.csv", 
+                    col_types = cols(...1 = col_skip(), `0%` = col_skip(), 
+                                     `25%` = col_skip(), `50%` = col_skip(), 
+                                     `75%` = col_skip(), `100%` = col_skip(), 
+                                     IQR = col_skip(), low = col_skip(), 
+                                     up = col_skip(), CoA = col_number())) %>%
+  mutate(across(1, as.factor)) %>%
+  mutate(across(3, as.factor)) %>%
+  mutate(`Standard Schp` = (.43 * CoA)) # calculates academic scholarships (everyone gets an academic scholarship)
+
+joiner$ERA <- c(rep('pre-2020', 19),
+                        rep('post-2020', 7))
+```
+
+```{r Wrangling Data 3, echo = FALSE, message=FALSE}
+oStuData <- left_join(joiner, oStuData) #attaches CoA and AY to StuData
+
+dfAID <- data.frame(cbind(oStuData$PELL, oStuData$NON_PLU_SCHOLARSHIP, oStuData$PLU_SCHOLARSHIP)) #makes aid df
+oStuData$AID <- rowSums(dfAID[1:3], na.rm = TRUE) #makes aid variable in StuData
+
+oStuData$EFC_AID <- rowSums(oStuData[28:29], na.rm = TRUE) #makes EFC + AID variable
+
+AID_LOAN <- data.frame(cbind(oStuData$LOAN, oStuData$AID)) #makes aid_loan df
+oStuData$AID_LOAN <- rowSums(AID_LOAN, na.rm = TRUE) #makes AID + LOAN variable
+
+oStuData$EFC_AID_LOAN <- rowSums(oStuData[,24:28], na.rm = TRUE) #makes efc_aid_loan
+
+oStuData <- filter(oStuData, oStuData$STILL_ENROLLED == 'No') #no currently enrolled students
+oStuData <- filter(oStuData, oStuData$AY != 'NA') #only years with AY and CoA data
+oStuData <- filter(oStuData, oStuData$ETHNICITY != 'International') # no international students
+oStuData <- filter(oStuData, oStuData$ETHNICITY != 'Unknown') # no unkown students
+
+oStuData <- oStuData %>% # scales variables relative to CoA
+  mutate(AID/CoA) %>% 
+  mutate(AID_LOAN/CoA) %>%
+  mutate(LOAN/CoA) %>%
+  mutate(EFC = EFC/2) %>% #scales EFC per semester
+  mutate(EFC_trunc = case_when(EFC >= CoA ~ CoA, 
+                               (EFC < CoA ~ EFC))) %>% # truncate EFC's > CoA to CoA
+  mutate(EFC_trunc/CoA) %>% #scales EFC relative to CoA
+  mutate(`AID_EFC_LOAN`= `EFC_trunc/CoA` + `AID/CoA`) #total aid package
+
+ # creating EFC levels 
+
+lowStuData <- oStuData %>%
+  filter(is.na(oStuData$PELL) == FALSE & # no missing pell info
+           is.na(oStuData$EFC) == FALSE &  # no missing EFC 
+           oStuData$PELL != 0) # no pell amounts at 0
+
+lowStuData$level <- rep('Low', nrow(lowStuData))
+
+midStuData <- oStuData %>%
+  filter((is.na(oStuData$PELL) == TRUE | oStuData$PELL == 0) & # no cases with PELL data
+           oStuData$`EFC_trunc/CoA` <= .33 & # dodges students at high EFC level (EFC that covers more than 32% of CoA, 32% grabbed from aid scatterplot)
+           is.na(oStuData$EFC) == FALSE &  # no missing EFC 
+           oStuData$`EFC_trunc/CoA` > .1) # dodges students who theoretically should have PELL (EFC that covers less than 10% of CoA, 10% grabbed from highest EFC_trunc/CoA in lowStuData)
+
+midStuData$level <- rep('Mid', nrow(midStuData))
+
+highStuData <- oStuData %>%
+  filter(oStuData$`EFC_trunc/CoA` > .33 & # grabs only students with EFC's that cover at least 32% of their CoA or more
+           is.na(oStuData$EFC) == FALSE) # no missing EFC
+
+highStuData$level <- rep('High', nrow(highStuData))
+
+StuData <- rbind(lowStuData, midStuData, highStuData)
+
+
+
+StuData <- StuData %>%
+  mutate(across(1, as.factor))
+
+outcomes <- c(`No` = 'Non-Grad', `Yes` = 'Grad') #outcome status labeller
+gen <- c(`No` = 'Non-First Gen', `Yes` = 'First Gen') #gen status labeller
+
+StuData$level <- factor(StuData$level, c("High", "Mid", "Low"))
+
+stuDataTestHM <- filter(StuData, StuData$level == 'Mid' | StuData$level == 'High')
+stuDataTestLM <- filter(StuData, StuData$level == 'Mid' | StuData$level == 'Low')
+stuDataTestHL <- filter(StuData, StuData$level == 'Low' | StuData$level == 'High')
+
+
+```
+
+## Descriptives
+
+### Aid
+
+```{r Scatter Aid/CoA by EFC_trunc/CoA, echo=FALSE, message=FALSE, fig.cap="Student Aid based on truncated expected family contribution (EFC). Both variables are scaled to the cost of attendance for a given year. EFC's greater than the cost of attendance for a given year have been truncated to the cost of attendance in $. n = 34,087"}
+ggplot(StuData, aes(x = `EFC_trunc/CoA`, y = `AID/CoA`, color = level))+
+  geom_jitter(alpha = .2,) +
+  geom_vline(xintercept = .095, linetype = "dotted")+
+  geom_vline(xintercept = .33, linetype = "dotted")+
+  labs(title = "Distribution of aid based on truncated EFC", 
+       y = "Aid relative to CoA",
+       x = "EFC relative to CoA (Truncated)",
+       color = "EFC Level")+
+  theme_minimal()
+
+summAID <- StuData %>%
+  group_by(level) %>%
+  get_summary_stats(`AID/CoA`, type = "mean_sd")
+
+kable(summAID, format = "markdown")
+```
+
+```{r}
+ggplot(StuData, aes(x = `EFC_trunc/CoA`, y = `AID/CoA`, color = level))+
+  facet_wrap(StuData$GRADUATED)+
+  geom_jitter(alpha = .2,)+
+  #geom_vline(xintercept = .095, linetype = "dotted")+
+  #geom_vline(xintercept = .33, linetype = "dotted")+
+  labs(title = "Distribution of aid based on truncated EFC, disaggregated by outcome",
+       subtitle = "Did the student graduate?",
+       y = "Aid relative to CoA",
+       x = "EFC relative to CoA (Truncated)",
+       color = "EFC Level")+
+  theme_minimal()
+```
+```{r}
+ggplot(StuData, aes(x = EFC, y = `AID/CoA`, color = level))+
+  geom_jitter(alpha = .2,)+
+  #geom_vline(xintercept = .095, linetype = "dotted")+
+  #geom_vline(xintercept = .33, linetype = "dotted")+
+  labs(title = "Distribution of aid based on unscaled and untransformed EFC",
+       y = "Aid relative to CoA",
+       x = "EFC (raw)",
+       color = "EFC Level")+
+  theme_minimal()
+```
+
+
+```{r BP Aid/CoA by Level, message=FALSE, echo=FALSE, fig.cap="Distirbution of Student Aid scaled by yearly cost of attendance."}
+
+AIDbxp <- ggboxplot(StuData, x = "level", y = "AID/CoA",
+                    ylab = "Aid relative to Cost of Attendance", 
+                    xlab = "EFC level")
+
+AIDbxp
+
+summAID <- StuData %>%
+  group_by(level) %>%
+  get_summary_stats(`AID/CoA`, type = "median_iqr")
+
+kable(summAID, format = "markdown") 
+
+```
+
+### Loan
+
+```{r Scatter LOAN/CoA by EFC_trunc/CoA, echo=FALSE, message=FALSE, fig.cap="Student loan amounts scaled by Cost of Attendance. Some students have no loan data on record. n = 23,855"}
+
+ggplot(StuData, aes(x = `EFC_trunc/CoA`, y =`LOAN/CoA`, color = level))+
+  geom_jitter(alpha = .2,) +
+  geom_vline(xintercept = .095, linetype = "dotted")+
+  geom_vline(xintercept = .33, linetype = "dotted")+
+  labs(y = "Loans relative to CoA",
+       x = "EFC relative to CoA (Truncated)",
+       color = "EFC Level")+
+  theme_minimal()
+
+summLOAN <- StuData %>%
+  group_by(level) %>%
+  get_summary_stats(`LOAN/CoA`, type = "mean_sd")
+
+kable(summLOAN, format = "markdown")
+```
+
+```{r}
+ggplot(StuData, aes(x = `EFC_trunc/CoA`, y =`LOAN/CoA`, color = level))+
+  facet_wrap(StuData$GRADUATED)+
+  geom_jitter(alpha = .2,) +
+  #geom_vline(xintercept = .095, linetype = "dotted")+
+  #geom_vline(xintercept = .33, linetype = "dotted")+
+  labs(y = "Loans relative to CoA",
+       x = "EFC relative to CoA (Truncated)",
+       color = "EFC Level",
+       subtitle = "Graduated?")+
+  theme_minimal()
+```
+
+
+```{r BP Loan/CoA by EFC_trunc/CoA by level, echo = FALSE, message=FALSE, warning=FALSE, fig.cap="Distribution of student loan amounts across EFC levels."}
+LOANbxp <- ggboxplot(StuData, x = "level", y = "LOAN/CoA",
+                    ylab = "Loans relative to Cost of Attendance", 
+                    xlab = "EFC level") 
+
+LOANbxp
+
+```
+
+```{r summ bxp LOAN, echo=FALSE, message=FALSE}
+summLOAN <- StuData %>%
+  group_by(level) %>%
+  get_summary_stats(`LOAN/CoA`, type = "median_iqr")
+
+kable(summLOAN, format = "markdown")
+```
+
+
+### Packages
+
+```{r Scatter AID_LOAN/CoA by EFC_trunc/CoA, echo=FALSE, message=FALSE, fig.cap="Total student aid package amounts scaled by cost of attendance based on EFC level. Some students have no loan data on record. n = 24,103"}
+
+ggplot(StuData, aes(x = `EFC_trunc/CoA`, y =`AID_LOAN/CoA`, color = level))+
+  geom_jitter(alpha = .2,) +
+  geom_vline(xintercept = .095, linetype = "dotted")+
+  geom_vline(xintercept = .33, linetype = "dotted")+
+  labs(y = "Total aid relative to CoA",
+       x = "EFC relative to CoA (Truncated)",
+       color = "EFC Level")+
+  theme_minimal()
+
+summPack <- StuData %>%
+  group_by(level) %>%
+  get_summary_stats(`AID_LOAN/CoA`, type = "mean_sd")
+
+kable(summPack, format = "markdown")
+```
+
+```{r BP Aid_Loan/CoA by EFC_trunc/CoA by level, echo = FALSE, message=FALSE, warning=FALSE, fig.cap="Distribution of total student loan amounts across EFC levels."}
+LOANbxp <- ggboxplot(StuData, x = "level", y = "AID_LOAN/CoA",
+                    ylab = "Total aid relative to Cost of Attendance", 
+                    xlab = "EFC level") 
+
+LOANbxp
+
+summLOAN <- StuData %>%
+  group_by(level) %>%
+  get_summary_stats(`AID_LOAN/CoA`, type = "median_iqr")
+
+kable(summLOAN, format = "markdown")
+```
+
+## Analysis
+
+### Middle income vs High income
+
+#### AID HM
+
+Ho: Middle income students mean package = High income students mean package Ha: Middle income students mean package !=
+High income students mean package
+
+```{r permutation test AID high mid, echo = FALSE, message=FALSE, warning = FALSE, fig.cap="Permutation testing for the difference in mean aid amounts between mid and high EFC levels. The observed difference (in red) is set at .005 for readability, but in reality was an observed difference .08 at a P < .02. Students at the mid EFC level had aid amounts which covered 8% more of the cost of attendance for a given year than students at the high EFC level. With a P < .02, this means that there is a less than 2% chance that this observed difference would be seen under the null hypothesis that there is no difference in mean aid amounts between mid and high EFC level students."}
+nullAidHM <- stuDataTestHM %>%
+  specify(formula = `AID/CoA` ~ level) %>%
+  hypothesize(null = "independence") %>%
+  generate(reps = 1500, type = "permute") %>%
+  calculate(stat = "diff in means", order = c("Mid", "High"))
+
+obsDiffAidHM <- stuDataTestHM %>%
+  specify(`AID/CoA` ~ level) %>%
+  calculate(stat = "diff in means", order = c("Mid", "High"))
+
+nullAidHM %>%
+  visualize()+
+  shade_p_value(.005, "both")+
+  labs(title = "")+
+  theme_test()
+
+nullAidHM %>%
+  get_p_value(obs_stat = obsDiffAidHM, direction = "both")
+
+```
+
+#### Loans HM
+
+```{r permutation test LOAN high mid, echo = FALSE, message=FALSE, warning = FALSE, fig.cap="Permutation testing for the difference in mean loan amounts between high and mid EFC level students. The observed difference (in red) is set at .005 for readability, but in reality was an observed difference .03 at a P < .02. Students at the high EFC level had an average loan amount that covers 3% more of the cost of attedendance for a given year than students at the mid EFC level. With a P < .02, this means that there is a less than 2% chance that this observed difference would be seen under the null hypothesis that there is no difference in mean aid amounts between high and mid level EFC students."}
+nullLOANHM <- stuDataTestHM %>%
+  specify(formula = `LOAN/CoA` ~ level) %>%
+  hypothesize(null = "independence") %>%
+  generate(reps = 1500, type = "permute") %>%
+  calculate("diff in means", order = c("High", "Mid"))
+
+obsDiffLOANHM <- stuDataTestHM %>%
+  specify(`LOAN/CoA` ~ level) %>%
+  calculate(stat = "diff in means", order = c("High", "Mid"))
+
+nullLOANHM %>%
+  visualize()+
+  shade_p_value(.01, "both")+
+  labs(title = "")+
+  theme_test()
+
+nullLOANHM %>%
+  get_p_value(obs_stat = obsDiffLOANHM, direction = "both")
+
+```
+
+#### Package HM
+
+```{r permutation test PACKAGE high mid, echo = FALSE, message=FALSE, warning = FALSE, fig.cap="Permutation testing for the difference in mean total package amounts between high and mid EFC level students. The observed difference (in red) is set at .001 for readability, but in reality was an observed difference .1 at a P < .02. Students at the Mid EFC level had an average total package that covers 10% more of the cost of attendance for a given year than mid level EFC students. With a P < .02, this means that there is a less than 2% chance that this observed difference would be seen under the null hypothesis that there is no difference in mean total package  amounts between low and mid level EFC students."}
+nullPackHM <- stuDataTestHM %>%
+  specify(formula = `AID_LOAN/CoA` ~ level) %>%
+  hypothesize(null = "independence") %>%
+  generate(reps = 1500, type = "permute") %>%
+  calculate(stat = "diff in means", order = c("Mid", "High"))
+
+obsDiffPackHM <- stuDataTestHM %>%
+  specify(`AID_LOAN/CoA` ~ level) %>%
+  calculate(stat = "diff in means", order = c("Mid", "High"))
+
+nullPackHM %>%
+  visualize()+
+  shade_p_value(.01, "both")+
+  labs(title = "")+
+  theme_test()
+
+nullPackHM %>%
+  get_p_value(obs_stat = obsDiffPackHM, direction = "both")
+
+```
+
+### Low income vs Mid income
+
+#### AID LM
+
+Ho: Low income students mean package = Mid income students mean package
+
+Ha: Low income students mean package !=
+Mid income students mean package
+
+```{r permutation test AID low mid, echo = FALSE, message=FALSE, warning = FALSE, fig.cap="Permutation testing for the difference in mean aid amounts between mid and low EFC levels. The observed difference (in red) is set at .01 for readability, but in reality was an observed difference of .24 at a P < .02. For students at the low EFC level, they received an aid amount that covers 24% more of the cost of attendance for a given year than students at the mid EFC level. At P < .02, this means that there is a less than 2% chance of observing this difference between aid amounts among low and mid level EFC's."}
+nullAidLM <- stuDataTestLM %>%
+  specify(formula = `AID/CoA` ~ level) %>%
+  hypothesize(null = "independence") %>%
+  generate(reps = 1500, type = "permute") %>%
+  calculate(stat = "diff in means", order = c("Low", "Mid"))
+
+obsDiffAidLM <- stuDataTestLM %>%
+  specify(`AID/CoA` ~ level) %>%
+  calculate(stat = "diff in means", order = c("Low", "Mid"))
+
+nullAidLM %>%
+  visualize()+
+  shade_p_value(.01, "both")+
+  labs(title = "")+
+  theme_test()
+
+nullAidLM %>%
+  get_p_value(obs_stat = obsDiffAidLM, direction = "both")
+
+```
+
+#### Loans LM
+
+Ho: Low income students loan amounts = Mid income students loan amounts
+
+Ha: Low income students loan amounts !=
+Mid income students loan amounts
+
+```{r permutation test LOAN low mid, echo = FALSE, message=FALSE, warning = FALSE, fig.cap="Permutation testing for the difference in mean loan amounts between high and mid EFC level students. The observed difference (in red) is set at .001 for readability, but in reality was an observed difference .06 at a P < .02. Students at the mid EFC level had an average loan amount that covers 6% more of the cost of attendance for a given year than students at the low EFC level. With a P < .02, this means that there is a less than 2% chance that this observed difference would be seen under the null hypothesis that there is no difference in mean aid amounts between high and mid level EFC students."}
+nullLOANLM <- stuDataTestLM %>%
+  specify(formula = `LOAN/CoA` ~ level) %>%
+  hypothesize(null = "independence") %>%
+  generate(reps = 1500, type = "permute") %>%
+  calculate(stat = "diff in means", order = c("Mid", "Low"))
+
+obsDiffLOANLM <- stuDataTestLM %>%
+  specify(`LOAN/CoA` ~ level) %>%
+  calculate(stat = "diff in means", order = c("Mid", "Low"))
+
+nullLOANLM %>%
+  visualize()+
+  shade_p_value(.01, "both")+
+  labs(title = "")+
+  theme_test()
+
+nullLOANLM %>%
+  get_p_value(obs_stat = obsDiffLOANLM, direction = "both")
+
+```
+
+#### Package LM
+
+Ho: Low income students mean pack = Mid income students mean pack Ha: Low income students mean pack !=
+Mid income students mean pack
+
+```{r permutation test PACK high mid, echo = FALSE, message=FALSE, warning = FALSE, fig.cap="Permutation testing for the difference in mean total package amounts between high and mid EFC level students. The observed difference (in red) is set at .001 for readability, but in reality was an observed difference .19 at a P < .02. Students at the low EFC level had an average total package that covers 19% more of the cost of attendance for a given year than mid level EFC students. With a P < .02, this means that there is a less than 2% chance that this observed difference would be seen under the null hypothesis that there is no difference in mean total package  amounts between low and mid level EFC students."}
+nullPackLM <- stuDataTestLM %>%
+  specify(formula = `AID_LOAN/CoA` ~ level) %>%
+  hypothesize(null = "independence") %>%
+  generate(reps = 1500, type = "permute") %>%
+  calculate(stat = "diff in means", order = c("Low", "Mid"))
+
+obsDiffPackLM <- stuDataTestLM %>%
+  specify(`AID_LOAN/CoA` ~ level) %>%
+  calculate(stat = "diff in means", order = c("Low", "Mid"))
+
+nullPackLM %>%
+  visualize()+
+  shade_p_value(.01, "both")+
+  labs(title = "")+
+  theme_test()
+
+nullLOANLM %>%
+  get_p_value(obs_stat = obsDiffPackLM, direction = "both")
+
+```
+
+### High income vs Low income
+
+Ho: High income students mean package = Low income students mean package Ha: High income students mean package !=
+Low income students mean package
+
+#### AID HL
+
+Ho: Low income students mean aid = High income students aid
+
+Ha: Low income students mean aid !=
+High income students mean aid
+
+```{r permutation test AID low high, echo = FALSE, message=FALSE, warning = FALSE, fig.cap="Permutation testing for the difference in mean aid amounts between mid and low EFC levels. The observed difference (in red) is set at .01 for readability, but in reality was an observed difference of .32 at a P < .02. For students at the low EFC level, they received an aid amount that covers 32% more of the cost of attendance for a given year than students at the high EFC level. At P < .02, this means that there is a less than 2% chance of observing this difference between aid amounts among low and high level EFC's."}
+nullAidHL <- stuDataTestHL %>%
+  specify(formula = `AID/CoA` ~ level) %>%
+  hypothesize(null = "independence") %>%
+  generate(reps = 1500, type = "permute") %>%
+  calculate("diff in means", order = c("Low", "High"))
+
+obsDiffAidHL <- stuDataTestHL %>%
+  specify(`AID/CoA` ~ level) %>%
+  calculate(stat = "diff in means", order = c("Low", "High"))
+
+nullAidHL %>%
+  visualize()+
+  shade_p_value(.01, "both")+
+  labs(title = "")+
+  theme_test()
+
+nullAidLM %>%
+  get_p_value(obs_stat = obsDiffAidHL, direction = "both")
+
+```
+
+#### Loans HL
+
+Ho: Low income students loan amounts = High income students loan amounts
+
+Ha: Low income students loan amounts !=
+High income students loan amounts
+
+```{r permutation test LOAN high low, echo = FALSE, message=FALSE, warning = FALSE, fig.cap="Permutation testing for the difference in mean loan amounts between high and low EFC level students. The observed difference (in red) is set at .001 for readability, but in reality was an observed difference .09 at a P < .02. Students at the high EFC level had an average loan amount that covers 9% more of the cost of attendance for a given year than students at the low EFC level. With a P < .02, this means that there is a less than 2% chance that this observed difference would be seen under the null hypothesis that there is no difference in loan amounts between high and low level EFC students."}
+nullLOANHL <- stuDataTestHL %>%
+  specify(formula = `LOAN/CoA` ~ level) %>%
+  hypothesize(null = "independence") %>%
+  generate(reps = 1500, type = "permute") %>%
+  calculate(stat = "diff in means", order = c("High", "Low"))
+
+obsDiffLOANHL <- stuDataTestHL %>%
+  specify(`LOAN/CoA` ~ level) %>%
+  calculate(stat = "diff in means", order = c("High", "Low"))
+
+nullLOANHL %>%
+  visualize()+
+  shade_p_value(.01, "both")+
+  labs(title = "")+
+  theme_test()
+
+nullLOANHL %>%
+  get_p_value(obs_stat = obsDiffLOANHL, direction = "both")
+
+```
+
+#### Package HL
+
+Ho: Low income students mean pack = high income students mean pack Ha: Low income students mean pack !=
+high income students mean pack
+
+```{r permutation test PACK high low, echo = FALSE, message=FALSE, warning = FALSE, fig.cap="Permutation testing for the difference in mean total package amounts between low and high EFC level students. The observed difference (in red) is set at .001 for readability, but in reality was an observed difference .19 at a P < .02. Students at the low EFC level had an average total package that covers 29%% more of the cost of attendance for a given year than high level EFC students. With a P < .02, this means that there is a less than 2% chance that this observed difference would be seen under the null hypothesis that there is no difference in mean total package  amounts between low and high level EFC students."}
+nullPackHL <- stuDataTestHL %>%
+  specify(formula = `AID_LOAN/CoA` ~ level) %>%
+  hypothesize(null = "independence") %>%
+  generate(reps = 1500, type = "permute") %>%
+  calculate(stat = "diff in means", order = c("Low", "High"))
+
+obsDiffPackHL <- stuDataTestHL %>%
+  specify(`AID_LOAN/CoA` ~ level) %>%
+  calculate(stat = "diff in means", order = c("Low", "High"))
+
+nullPackHL %>%
+  visualize()+
+  shade_p_value(.01, "both")+
+  labs(title = "")+
+  theme_test()
+
+nullLOANHL %>%
+  get_p_value(obs_stat = obsDiffPackHL, direction = "both")
+
+```
+
+These EFC levels were different across loans and aid amounts.
+
+```{r split by level, echo=FALSE, message=FALSE}
+
+High <- StuData %>%
+  filter(level == 'High') %>%
+  select(c(GRADUATED, `AID/CoA`, `LOAN/CoA`, `EFC_trunc/CoA`,`AID_LOAN/CoA`, `AID_EFC_LOAN`, GENDER, ETHNICITY, FGEN))
+
+Mid <- StuData %>% 
+  filter(level == 'Mid') %>%
+  select(c(GRADUATED, `AID/CoA`, `LOAN/CoA`, `EFC_trunc/CoA`,`AID_LOAN/CoA`, `AID_EFC_LOAN`, GENDER, ETHNICITY, FGEN))
+
+Low <- StuData %>%
+  filter(level == 'Low') %>%
+  select(c(GRADUATED, `AID/CoA`, `LOAN/CoA`, `EFC_trunc/CoA`,`AID_LOAN/CoA`, `AID_EFC_LOAN`, GENDER, ETHNICITY, FGEN))
+
+```
+
+### Logistic Regression Correlation Testing
+
+#### Visualize Outcomes Among Levels
+
+```{r Desc High, echo=FALSE, message=FALSE}
+
+ggplot(High, aes(x = ETHNICITY, fill = GRADUATED)) +
+  geom_bar()+
+  coord_flip()+
+  theme_test()
+
+ggplot(High, aes(x = GENDER, fill = GRADUATED))+
+  geom_bar()+
+  coord_flip()+
+  theme_test()
+
+ggplot(High, aes(x = FGEN, fill = GRADUATED))+
+  geom_bar()+
+  coord_flip()+
+  theme_test()
+
+ggplot(High, aes(x = `AID/CoA`, fill = GRADUATED, after_stat(scaled)))+
+  geom_density()+
+  theme_test()
+
+ggplot(High, aes(x = `LOAN/CoA`, fill = GRADUATED, after_stat(scaled)))+
+  geom_density()+
+  theme_test()
+
+ggplot(High, aes(x = `AID_LOAN/CoA`, fill = GRADUATED, after_stat(scaled)))+
+  geom_density()+
+  theme_test()
+
+ggplot(High, aes(x = `EFC_trunc/CoA`, fill = GRADUATED, after_stat(scaled)))+
+  geom_density()+
+  theme_test()
+
+ggplot(High, aes(x = AID_EFC_LOAN, fill = GRADUATED, after_stat(scaled)))+
+  geom_density()+
+  theme_test()
+
+```
+
+
+
+```{r Desc Mid, echo=FALSE, message=FALSE}
+ggplot(Mid, aes(x = ETHNICITY, fill = GRADUATED)) +
+  geom_bar()+
+  coord_flip()+
+  theme_test()
+
+ggplot(Mid, aes(x = GENDER, fill = GRADUATED))+
+  geom_bar()+
+  coord_flip()+
+  theme_test()
+
+ggplot(Mid, aes(x = FGEN, fill = GRADUATED))+
+  geom_bar()+
+  coord_flip()+
+  theme_test()
+
+ggplot(Mid, aes(x = `AID/CoA`, fill = GRADUATED, after_stat(scaled)))+
+  geom_density()+
+  theme_test()
+
+ggplot(Mid, aes(x = `LOAN/CoA`, fill = GRADUATED, after_stat(scaled)))+
+  geom_density()+
+  theme_test()
+
+ggplot(Mid, aes(x = `AID_LOAN/CoA`, fill = GRADUATED, after_stat(scaled)))+
+  geom_density()+
+  theme_test()
+
+ggplot(Mid, aes(x = `EFC_trunc/CoA`, fill = GRADUATED, after_stat(scaled)))+
+  geom_density()+
+  theme_test()
+
+ggplot(Mid, aes(x = AID_EFC_LOAN, fill = GRADUATED, after_stat(scaled)))+
+  geom_density()+
+  theme_test()
+
+```
+
+```{r Desc Low, echo=FALSE, message=FALSE}
+ggplot(Low, aes(x = ETHNICITY, fill = GRADUATED)) +
+  geom_bar()+
+  coord_flip()+
+  theme_test()
+
+ggplot(Low, aes(x = GENDER, fill = GRADUATED))+
+  geom_bar()+
+  coord_flip()+
+  theme_test()
+
+ggplot(Low, aes(x = FGEN, fill = GRADUATED))+
+  geom_bar()+
+  coord_flip()+
+  theme_test()
+
+ggplot(Low, aes(x = `AID/CoA`, fill = GRADUATED, after_stat(scaled)))+
+  geom_density()+
+  theme_test()
+
+ggplot(Low, aes(x = `LOAN/CoA`, fill = GRADUATED, after_stat(scaled)))+
+  geom_density()+
+  theme_test()
+
+ggplot(Low, aes(x = `AID_LOAN/CoA`, fill = GRADUATED, after_stat(scaled)))+
+  geom_density()+
+  theme_test()
+
+ggplot(Low, aes(x = `EFC_trunc/CoA`, fill = GRADUATED, after_stat(scaled)))+
+  geom_density()+
+  theme_test()
+
+ggplot(Low, aes(x = AID_EFC_LOAN, fill = GRADUATED, after_stat(scaled)))+
+  geom_density()+
+  theme_test()
+```
+
+```{r Desc All Levels, echo=FALSE, message=FALSE, fig.width=8}
+
+ggplot(StuData, aes(x = ETHNICITY, fill = GRADUATED))+
+  facet_wrap(StuData$level)+
+  geom_bar(position = "fill")+
+  coord_flip()+
+  labs(title = "Outcomes by Race and EFC Level", 
+       x = "Race", 
+       y = "Proportion",
+       color = "Graduated?")+
+  theme_test()
+
+ggplot(StuData, aes(x = GENDER, fill = GRADUATED))+
+  facet_wrap(StuData$level)+
+  geom_bar(position = "fill")+
+  coord_flip()+
+  labs(title = "Outcomes by Gender and EFC Levels", 
+       x = "Gender", 
+       y = "Proportion",
+       color = "Graduated?")+
+  theme_test()
+
+ggplot(StuData, aes(x = FGEN, fill = GRADUATED))+
+  facet_wrap(StuData$level)+
+  geom_bar(position = "fill")+
+  coord_flip()+
+  labs(title = "Outcomes by Generational Status and EFC Levels", 
+       x = "First Generation?", 
+       y = "Proportion",
+       color = "Graduated?")+
+  theme_test()
+
+ggplot(StuData, aes(x = GRADUATED))+
+  facet_wrap(StuData$level)+
+  geom_bar(position = "dodge")+
+  coord_flip()+
+  labs(title = "Outcomes by EFC levels", 
+       x = "Graduated?")+
+  theme_test()
+
+ggplot(StuData, aes(x = `AID/CoA`, fill = GRADUATED, after_stat(scaled)))+
+  facet_wrap(StuData$level)+
+  geom_density()+
+  labs(title = "Outcomes by Aid (scaled) and EFC Levels", 
+       x = "Aid (scaled)",
+       y = "Probability", 
+       color = "Graduated?")+
+  theme_test()
+
+ggplot(StuData, aes(x = `LOAN/CoA`, fill = GRADUATED, after_stat(scaled)))+
+  facet_wrap(StuData$level)+
+  geom_density()+
+  labs(title = "Outcomes by Loans (scaled) and EFC Levels", 
+       x = "Loans (scaled)",
+       y = "Probability", 
+       color = "Graduated?")+
+  theme_test()
+
+ggplot(StuData, aes(x = `AID_LOAN/CoA`, fill = GRADUATED, after_stat(scaled)))+
+  facet_wrap(StuData$level)+
+  geom_density()+
+  labs(title = "Outcomes by Aid+Loans (scaled) and EFC Levels", 
+       x = "Aid + Loans (scaled)",
+       y = "Probability", 
+       color = "Graduated?")+
+  theme_test()
+
+ggplot(StuData, aes(x = `EFC_trunc/CoA`, fill = GRADUATED, after_stat(scaled)))+
+  facet_wrap(StuData$level)+
+  geom_density()+
+  labs(title = "Outcomes by EFC and EFC Levels", 
+       x = "EFC (truncated and scaled)",
+       y = "Probability", 
+       color = "Graduated?")+
+  theme_test()
+
+ggplot(StuData, aes(x = AID_EFC_LOAN, fill = GRADUATED, after_stat(scaled)))+
+  facet_wrap(StuData$level)+
+  geom_density()+
+  labs(title = "Outcomes by Aid+Loans+EFC and EFC Levels", 
+       x = "Aid+Loans+EFC (truncated and scaled)",
+       y = "Probability", 
+       color = "Graduated?")+
+  theme_test()
+
+```
+
+```{r}
+summ <- StuData %>%
+  group_by(level) %>%
+  count(GRADUATED)
+
+kable(summ, format = "markdown")
+```
+
+#### High Out
+
+
+```{r LogR 2 High Out Model 1 ALL, echo=FALSE, message=FALSE, fig.width = 10}
+
+Highlogit <- glm(GRADUATED ~ ETHNICITY+GENDER+FGEN+`AID/CoA`+`LOAN/CoA`+`EFC_trunc/CoA`+`AID_LOAN/CoA`+AID_EFC_LOAN,data=High,family="binomial"(link="logit"))
+ 
+ summary(Highlogit)
+ 
+ HighBetas <- data.frame(Highlogit$coefficients)
+ 
+ ggplot(HighBetas, aes(x = row.names(HighBetas), y = Highlogit.coefficients, fill = row.names(HighBetas)))+
+   geom_col(position="dodge", width = .5)+
+   geom_hline(yintercept = .6931, linetype = "dotted")+
+   geom_hline(yintercept = 0)+
+   coord_flip()+
+   labs(title = "Factors which affect odds of graduation for High EFC students",
+        y = "Log odds", 
+        x =" ")+
+  theme_test()+
+  guides(fill="none")
+  
+ 
+
+
+```
+
+#### Mid Out
+
+```{r LogR Mid Out Model 1 ALL, echo=FALSE, message=FALSE, fig.width=10}
+
+Midlogit <- glm(GRADUATED ~ ETHNICITY+GENDER+FGEN+`AID/CoA`+`LOAN/CoA`+`EFC_trunc/CoA`+`AID_LOAN/CoA`+AID_EFC_LOAN,data=Mid,family="binomial"(link="logit"))
+ 
+ summary(Midlogit)
+
+MidBetas <- data.frame(Midlogit$coefficients)
+ 
+ ggplot(MidBetas, aes(x = row.names(MidBetas), y = Midlogit.coefficients, fill = row.names(MidBetas)))+
+   geom_col(position="dodge", width = .5)+
+   geom_hline(yintercept = .6931, linetype = "dotted")+
+   geom_hline(yintercept = 0)+
+   coord_flip()+
+   labs(title = "Factors which affect odds of graduation for Mid EFC students",
+        y = "Log odds", 
+        x =" ")+
+  theme_test()+
+  guides(fill="none")
+  
+```
+
+#### Low Out
+
+```{r LogR Low Out Model 1 ALL, echo=FALSE, message=FALSE, fig.width=10}
+Lowlogit <- glm(GRADUATED ~ ETHNICITY+GENDER+FGEN+`AID/CoA`+`LOAN/CoA`+`EFC_trunc/CoA`+`AID_LOAN/CoA`+AID_EFC_LOAN,data=Low,family="binomial"(link="logit"))
+ 
+ summary(Lowlogit)
+
+LowBetas <- data.frame(Lowlogit$coefficients)
+ 
+ ggplot(LowBetas, aes(x = row.names(LowBetas), y = Lowlogit.coefficients, fill = row.names(LowBetas)))+
+   geom_col(position="dodge", width = .5)+
+   geom_hline(yintercept = .6931, linetype = "dotted")+
+   geom_hline(yintercept = 0)+
+   coord_flip()+
+   labs(title = "Factors which affect odds of graduation for Low EFC students",
+        y = "Log odds", 
+        x =" ")+
+  theme_test()+
+  guides(fill="none")
+```
+
