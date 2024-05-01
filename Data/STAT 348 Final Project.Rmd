@@ -52,21 +52,22 @@ SFA_Clean <- subset(SFA_Clean, select = -c(ETHNICITY, MAJORS, MINORS))
 ```
 
 ```{r}
+#got rid of ws and curr gpa
 
-Logits <- glm(GRADUATED ~ IN_STATE+INTERNATIONAL+GENDER+American_Indian_or_Native_Alaskan+Asian+Black_or_African_American+Hispanic+Native_Hawaiian_or_Pacific_Islander+White+FIRST_YEAR_ON_CAMPUS+FGEN+FIRST_YEAR_MEAL_PLAN+WORK_STUDY+PELL+LOAN+NON_PLU_SCHOLARSHIP+PLU_SCHOLARSHIP+EFC+EFC_trunc+CURR_GPA+FIRST_YEAR_CREDITS+DFWIS, data=SFA_Clean, family="binomial"(link="logit"))
+Logits <- glm(GRADUATED ~ IN_STATE+INTERNATIONAL+GENDER+American_Indian_or_Native_Alaskan+Asian+Black_or_African_American+Hispanic+Native_Hawaiian_or_Pacific_Islander+White+FIRST_YEAR_ON_CAMPUS+FGEN+FIRST_YEAR_MEAL_PLAN+PELL+LOAN+NON_PLU_SCHOLARSHIP+PLU_SCHOLARSHIP+EFC+EFC_trunc+FIRST_YEAR_CREDITS+DFWIS, data=SFA_Clean, family="binomial"(link="logit"))
  
 summary(Logits)
 
 Coeff <- data.frame(Logits$coefficients)
 
-ggplot(Coeff, aes(x = reorder(row.names(Coeff), Logits.coefficients), y = Logits.coefficients, fill = row.names(Coeff)))+
+ggplot(Coeff, aes(x = reorder(row.names(Coeff), exp(Logits.coefficients)), y = exp(Logits.coefficients), fill = row.names(Coeff)))+
    geom_col(position="dodge", width = .5)+
-   geom_hline(yintercept = .6931, linetype = "dotted")+
    geom_hline(yintercept = 0)+
+   geom_hline(yintercept = 1, linetype = "dotted")+
    coord_flip()+
    labs(title = "First year actors associated with graduation",
         subtitle = "All Factors",
-        y = "Log odds", 
+        y = "Odds Ratios", 
         x =" ")+
   theme_test()+
   guides(fill="none")
@@ -74,7 +75,7 @@ ggplot(Coeff, aes(x = reorder(row.names(Coeff), Logits.coefficients), y = Logits
 ```
 
 ```{r}
-Logits <- glm(GRADUATED ~ IN_STATE+INTERNATIONAL+GENDER+American_Indian_or_Native_Alaskan+Asian+Black_or_African_American+Hispanic+Native_Hawaiian_or_Pacific_Islander+White+FIRST_YEAR_ON_CAMPUS+FGEN+FIRST_YEAR_MEAL_PLAN+WORK_STUDY+PELL+LOAN+NON_PLU_SCHOLARSHIP+PLU_SCHOLARSHIP+EFC+EFC_trunc+CURR_GPA+FIRST_YEAR_CREDITS+DFWIS, data=SFA_Clean, family="binomial"(link="logit"))
+Logits <- glm(GRADUATED ~ IN_STATE+INTERNATIONAL+GENDER+American_Indian_or_Native_Alaskan+Asian+Black_or_African_American+Hispanic+Native_Hawaiian_or_Pacific_Islander+White+FIRST_YEAR_ON_CAMPUS+FGEN+FIRST_YEAR_MEAL_PLAN+PELL+LOAN+NON_PLU_SCHOLARSHIP+PLU_SCHOLARSHIP+EFC+EFC_trunc+FIRST_YEAR_CREDITS+DFWIS, data=SFA_Clean, family="binomial"(link="logit"))
  
 summary(Logits)
 
@@ -83,89 +84,39 @@ step(Logits, test="LRT")
 
 ```
 ```{r}
-Logits_Recc <- glm(formula = GRADUATED ~ IN_STATE + GENDER + Asian + White + 
-    WORK_STUDY + NON_PLU_SCHOLARSHIP + PLU_SCHOLARSHIP + EFC + 
-    CURR_GPA + FIRST_YEAR_CREDITS, family = binomial(link = "logit"), 
+Logits_Recc <- glm(formula = GRADUATED ~ IN_STATE + Asian + Native_Hawaiian_or_Pacific_Islander + 
+    White + FGEN + PELL + NON_PLU_SCHOLARSHIP + PLU_SCHOLARSHIP + 
+    EFC_trunc + FIRST_YEAR_CREDITS + DFWIS, family = binomial(link = "logit"), 
     data = SFA_Clean)
 
 summary(Logits_Recc)
 
 Coeff <- data.frame(Logits_Recc$coefficients)
 
-ggplot(Coeff, aes(x = reorder(row.names(Coeff), Logits_Recc.coefficients), y = Logits_Recc.coefficients, fill = row.names(Coeff)))+
+ggplot(Coeff, aes(x = reorder(row.names(Coeff), exp(Logits_Recc.coefficients)), 
+                  y = exp(Logits_Recc.coefficients), fill = row.names(Coeff)))+
    geom_col(position="dodge", width = .5)+
-   geom_hline(yintercept = .6931, linetype = "dotted")+
    geom_hline(yintercept = 0)+
+   geom_hline(yintercept = 1, linetype = "dotted")+
    coord_flip()+
    labs(title = "First year actors associated with graduation",
         subtitle = "LRT Step Recommended Factors",
-        y = "Log odds", 
+        y = "Odds Ratios", 
         x =" ")+
   theme_test()+
   guides(fill="none")
+
 ```
 Note: Using LRT, the step() function takes all the variables and essentially whittles down to a list of recommended variables that maximizes the results of the LRT. 
 
-```{r}
-Logits <- glm(GRADUATED ~ WORK_STUDY+NON_PLU_SCHOLARSHIP+PLU_SCHOLARSHIP+CURR_GPA, 
-              data=SFA_Clean,
-              family="binomial"(link="logit"))
- 
-summary(Logits)
-
-Coeff <- data.frame(Logits$coefficients)
-
-ggplot(Coeff, aes(x = reorder(row.names(Coeff), Logits.coefficients), y = Logits.coefficients, fill = row.names(Coeff)))+
-   geom_col(position="dodge", width = .5)+
-   geom_hline(yintercept = .6931, linetype = "dotted")+
-   geom_hline(yintercept = 0)+
-   coord_flip()+
-   labs(title = "First year actors associated with graduation",
-        subtitle = "Factors with large beta values",
-        y = "Log odds", 
-        x =" ")+
-  theme_test()+
-  guides(fill="none")
-
-```
-Note: These variables were selected before the step(LRT) evaluation. I chose these variables based on the plot showing the beta values for all variables.
-
-```{r}
-Logits <- glm(GRADUATED ~ IN_STATE+INTERNATIONAL+GENDER+American_Indian_or_Native_Alaskan+Asian+Black_or_African_American+Hispanic+Native_Hawaiian_or_Pacific_Islander+White+FIRST_YEAR_ON_CAMPUS+FGEN+FIRST_YEAR_MEAL_PLAN+WORK_STUDY+PELL+LOAN+NON_PLU_SCHOLARSHIP+PLU_SCHOLARSHIP+EFC+EFC_trunc, data=SFA_Clean, family="binomial"(link="logit"))
- 
-summary(Logits)
-
-Coeff <- data.frame(Logits$coefficients)
-
-ggplot(Coeff, aes(x = reorder(row.names(Coeff), Logits.coefficients), y = Logits.coefficients, fill = row.names(Coeff)))+
-   geom_col(position="dodge", width = .5)+
-   geom_hline(yintercept = .6931, linetype = "dotted")+
-   geom_hline(yintercept = 0)+
-   coord_flip()+
-   labs(title = "First year actors associated with graduation",
-        subtitle = "Without academic factors",
-        y = "Log odds", 
-        x =" ")+
-  theme_test()+
-  guides(fill="none")
-
-res <- residuals(Logits, type = "response")
-
-# residual vs. fitted plot 
-plot(fitted(Logits), res)+
-  abline(0,0) 
-
- 
-
-
-```
-Notes: Running the logistic regression model with different factors present changed the effect of each factor. This is unsurprising because it can be anticipated that the effect of a given factor may be spuriously related to other ones (i.e. the effect of PELL was very low when removing the presence of other variables, but when introducing demographic variables in this plot, PELL skyrockets. I suspect that this is an interaction between race and PELL)
-
-
 To do next: We need to figure out how to show significance values and standard error for the beta plot(s) that we choose to report. Additionally, we need to figure out which metric in the output reports model accuracy
 
+sources consulted:
 
-```{r}
+https://sscc.wisc.edu/sscc/pubs/glm-r/index.html#glm-model-evaluation
+https://www.geeksforgeeks.org/how-to-create-a-residual-plot-in-r/
 
-```
+Be careful using the magnitude of the beta. "Normalize the betas"
+
+AIC represents model fit
 
