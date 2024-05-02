@@ -1,0 +1,201 @@
+---
+title: "STAT 348 Final Project"
+output: html_notebook
+---
+
+```{r, message=FALSE, warning=FALSE}
+library(tidyverse)
+library(infer)
+library(car)
+
+# SFA cleaned comes from an outside rmd file that takes the original data and joins cost of attendance data, calculates a truncated EFC value, and creates an EFC level label based on the amount of need based aid a student receives
+
+SFA <- read_csv("SFA_Cleaned.csv",
+                col_types = cols(...1 = col_skip())) 
+
+SFA <- SFA %>%
+  mutate(across(1, as.factor))%>%
+  mutate(across(3, as.factor))%>%
+  mutate(across(8:19, as.factor))%>%
+  mutate(across(27, as.factor))%>%
+  arrange(UID, TERM)%>%
+  distinct(UID, .keep_all = TRUE) %>%
+  filter(PRIOR_SEMESTERS_COMPLETED == '1')
+
+SFA_Clean <- SFA %>% # This code encodes all data into either a yes or a no
+  mutate(
+    IN_STATE = if_else(IN_STATE == 'Yes', 1, 0),
+    INTERNATIONAL = if_else(INTERNATIONAL == 'Yes', 1, 0),
+    GENDER = if_else(GENDER == 'Male', 1, 0),
+    American_Indian_or_Native_Alaskan = if_else(ETHNICITY == 'American Indian or Native Alaskan', 1, 0),
+    Asian = if_else(ETHNICITY == 'Asian', 1, 0),
+    Black_or_African_American = if_else(ETHNICITY == 'Black or African American', 1, 0),
+    Hispanic = if_else(ETHNICITY == 'Hispanic', 1, 0),
+    Native_Hawaiian_or_Pacific_Islander = if_else(ETHNICITY == 'Native Hawaiian or Pacific Islander', 1, 0),
+    White = if_else(ETHNICITY == 'White', 1, 0),
+    FIRST_YEAR_ON_CAMPUS = if_else(FIRST_YEAR_ON_CAMPUS == 'Yes', 1, 0),
+    FGEN = if_else(FGEN == 'Yes', 1, 0),
+    GRADUATED = if_else(GRADUATED == 'Yes', 1, 0),
+    STILL_ENROLLED = if_else(STILL_ENROLLED == 'Yes', 1, 0),
+    FIRST_YEAR_MEAL_PLAN = if_else(FIRST_YEAR_MEAL_PLAN == 'Yes', 1, 0),
+    WORK_STUDY = if_else(is.na(WORK_STUDY), 0, WORK_STUDY / CoA),
+    PELL = if_else(is.na(PELL), 0, PELL / CoA),
+    LOAN = if_else(is.na(LOAN), 0, LOAN / CoA),
+    NON_PLU_SCHOLARSHIP = if_else(is.na(NON_PLU_SCHOLARSHIP), 0, NON_PLU_SCHOLARSHIP / CoA),
+    PLU_SCHOLARSHIP = if_else(is.na(PLU_SCHOLARSHIP), 0, PLU_SCHOLARSHIP / CoA),
+    EFC = if_else(is.na(EFC), 0, EFC / CoA),
+    EFC_trunc = if_else(is.na(EFC_trunc), 0, EFC_trunc / CoA))
+  
+#Removes ethnicity because of the 1/0 encoding and removes majors and minors because of time (there are over a hundred different majors and minors, we would need to figure out an encoding scheme that we don't have time to do.)
+
+SFA_Clean <- subset(SFA_Clean, select = -c(ETHNICITY, MAJORS, MINORS)) 
+```
+
+```{r}
+#got rid of ws and curr gpa
+
+Logits <- glm(GRADUATED ~ IN_STATE+INTERNATIONAL+GENDER+American_Indian_or_Native_Alaskan+Asian+Black_or_African_American+Hispanic+Native_Hawaiian_or_Pacific_Islander+White+FIRST_YEAR_ON_CAMPUS+FGEN+FIRST_YEAR_MEAL_PLAN+PELL+LOAN+NON_PLU_SCHOLARSHIP+PLU_SCHOLARSHIP+EFC+EFC_trunc+FIRST_YEAR_CREDITS+DFWIS, data=SFA_Clean, family="binomial"(link="logit"))
+ 
+summary(Logits)
+
+Coeff <- data.frame(Logits$coefficients)
+
+ggplot(Coeff, aes(x = reorder(row.names(Coeff), exp(Logits.coefficients)), y = exp(Logits.coefficients), fill = row.names(Coeff)))+
+   geom_col(position="dodge", width = .5)+
+   geom_hline(yintercept = 0)+
+   geom_hline(yintercept = 1, linetype = "dotted")+
+   coord_flip()+
+   labs(title = "First year actors associated with graduation",
+        subtitle = "All Factors",
+        y = "Odds Ratios", 
+        x =" ")+
+  theme_test()+
+  guides(fill="none")
+
+vif(Logits)
+
+```
+
+```{r}
+Logits <- glm(GRADUATED ~ IN_STATE+INTERNATIONAL+GENDER+American_Indian_or_Native_Alaskan+Asian+Black_or_African_American+Hispanic+Native_Hawaiian_or_Pacific_Islander+White+FGEN+LOAN+PLU_SCHOLARSHIP+EFC+EFC_trunc+FIRST_YEAR_CREDITS+DFWIS, data=SFA_Clean, family="binomial"(link="logit"))
+ 
+summary(Logits)
+
+Coeff <- data.frame(Logits$coefficients)
+
+ggplot(Coeff, aes(x = reorder(row.names(Coeff), exp(Logits.coefficients)), y = exp(Logits.coefficients), fill = row.names(Coeff)))+
+   geom_col(position="dodge", width = .5)+
+   geom_hline(yintercept = 0)+
+   geom_hline(yintercept = 1, linetype = "dotted")+
+   coord_flip()+
+   labs(title = "First year actors associated with graduation",
+        subtitle = "Removed high VIF variables",
+        y = "Odds Ratios", 
+        x =" ")+
+  theme_test()+
+  guides(fill="none")
+
+vif(Logits)
+```
+
+
+```{r}
+Logits <- glm(GRADUATED ~ IN_STATE+INTERNATIONAL+GENDER+American_Indian_or_Native_Alaskan+Asian+Black_or_African_American+Hispanic+Native_Hawaiian_or_Pacific_Islander+White+FGEN+PELL+LOAN+PLU_SCHOLARSHIP+EFC+EFC_trunc+FIRST_YEAR_CREDITS+DFWIS, data=SFA_Clean, family="binomial"(link="logit"))
+ 
+summary(Logits)
+
+step(Logits, direction = "both")
+
+vif(Logits)
+```
+```{r}
+Logits_Recc <- glm(formula = GRADUATED ~ IN_STATE + INTERNATIONAL + GENDER + 
+    American_Indian_or_Native_Alaskan + Asian + Black_or_African_American + 
+    Hispanic + Native_Hawaiian_or_Pacific_Islander + White + 
+    FGEN + PELL + LOAN + PLU_SCHOLARSHIP + EFC + EFC_trunc + 
+    FIRST_YEAR_CREDITS + DFWIS, family = binomial(link = "logit"), 
+    data = SFA_Clean)
+
+
+summary(Logits_Recc)
+
+Coeff <- data.frame(Logits_Recc$coefficients)
+
+ggplot(Coeff, aes(x = reorder(row.names(Coeff), exp(Logits_Recc.coefficients)), 
+                  y = exp(Logits_Recc.coefficients), fill = row.names(Coeff)))+
+   geom_col(position="dodge", width = .5)+
+   geom_hline(yintercept = 0)+
+   geom_hline(yintercept = 1, linetype = "dotted")+
+   coord_flip()+
+   labs(title = "First year factors associated with graduation",
+        subtitle = "Forward Step Recommended Factors Using LRT. AIC = 6714",
+        y = "Odds Ratios", 
+        x =" ")+
+  theme_test()+
+  guides(fill="none")
+
+```
+
+```{r}
+Logits_Recc <- glm(formula = GRADUATED ~ IN_STATE + Asian + Native_Hawaiian_or_Pacific_Islander + 
+    White + FGEN + PLU_SCHOLARSHIP + EFC_trunc + FIRST_YEAR_CREDITS + 
+    DFWIS, family = binomial(link = "logit"), data = SFA_Clean)
+
+
+summary(Logits_Recc)
+
+Coeff <- data.frame(Logits_Recc$coefficients)
+
+ggplot(Coeff, aes(x = reorder(row.names(Coeff), exp(Logits_Recc.coefficients)), 
+                  y = exp(Logits_Recc.coefficients), fill = row.names(Coeff)))+
+   geom_col(position="dodge", width = .5)+
+   geom_hline(yintercept = 0)+
+   geom_hline(yintercept = 1, linetype = "dotted")+
+   coord_flip()+
+   labs(title = "First year factors associated with graduation",
+        subtitle = "Both Step Recommended Factors Using LRT. AIC = 6706",
+        y = "Odds Ratios", 
+        x =" ")+
+  theme_test()+
+  guides(fill="none")
+
+```
+
+```{r}
+
+Logits_Recc <- glm(formula = GRADUATED ~ IN_STATE + Asian + Native_Hawaiian_or_Pacific_Islander + 
+    White + FGEN + PLU_SCHOLARSHIP + EFC_trunc + FIRST_YEAR_CREDITS + 
+    DFWIS, family = binomial(link = "logit"), data = SFA_Clean)
+
+
+summary(Logits_Recc)
+
+Coeff <- data.frame(Logits_Recc$coefficients)
+
+ggplot(Coeff, aes(x = reorder(row.names(Coeff), exp(Logits_Recc.coefficients)), 
+                  y = exp(Logits_Recc.coefficients), fill = row.names(Coeff)))+
+   geom_col(position="dodge", width = .5)+
+   geom_hline(yintercept = 0)+
+   geom_hline(yintercept = 1, linetype = "dotted")+
+   coord_flip()+
+   labs(title = "First year factors associated with graduation",
+        subtitle = "Backward Step Recommended Factors Using LRT. AIC = 6706",
+        y = "Odds Ratios", 
+        x =" ")+
+  theme_test()+
+  guides(fill="none")
+
+```
+
+
+Note: Using LRT, the step() function takes all the variables and essentially whittles down to a list of recommended variables that maximizes the results of the LRT. The inputs I decided to provide were based on variables with low VIF from the first logistic regression model. This does not mean that the variables in the LRT recommended model are more important, it means that these added the most value to the model. 
+
+To do next: We need to figure out how to show significance values and standard error for the odds ratios plot(s) that we choose to report. Additionally, we need to figure out which metric in the output reports model accuracy
+
+sources consulted:
+
+https://sscc.wisc.edu/sscc/pubs/glm-r/index.html#glm-model-evaluation
+
+
+
+
